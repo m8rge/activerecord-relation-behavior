@@ -56,47 +56,6 @@ class EActiveRecordRelationBehavior extends CActiveRecordBehavior
 	}
 
 	/**
-	 * Responds to {@link CModel::onBeforeValidate} event.
-	 * @throws CDbException
-	 * @param CModelEvent $event event parameter
-	 */
-	public function beforeValidate($event)
-	{
-		foreach($this->owner->relations() as $name => $relation)
-		{
-			switch($relation[0]) // relation type such as BELONGS_TO, HAS_ONE, HAS_MANY, MANY_MANY
-			{
-				// BELONGS_TO: if the relationship between table A and B is one-to-many, then B belongs to A
-				//             (e.g. Post belongs to User);
-				// attribute of $this->owner has to be changed
-				case CActiveRecord::BELONGS_TO:
-
-					if (!$this->owner->hasRelated($name) || !$this->isRelationSupported($relation))
-						break;
-
-					$pk=null;
-					if (($related=$this->owner->getRelated($name, false))!==null) {
-						if (is_object($related)) {
-							/** @var CActiveRecord $related */
-							if ($related->isNewRecord)
-								throw new CDbException('You can not save a record that has new related records!');
-							$pk=$related->getPrimaryKey();
-						} else {
-							$pk=$related;
-						}
-					}
-
-					// @todo add support for composite primary keys
-					if (!is_array($pk)) {
-						$this->owner->setAttribute($relation[2], $pk);
-					}
-
-				break;
-			}
-		}
-	}
-
-	/**
 	 * Responds to {@link CActiveRecord::onBeforeSave} event.
 	 * @param CModelEvent $event event parameter
 	 */
@@ -109,8 +68,10 @@ class EActiveRecordRelationBehavior extends CActiveRecordBehavior
 
 	/**
 	 * Responds to {@link CActiveRecord::onAfterSave} event.
-	 * @throws CDbException
+	 *
 	 * @param CModelEvent $event event parameter
+	 * @throws Exception
+	 * @return void
 	 */
 	public function afterSave($event)
 	{
@@ -162,61 +123,6 @@ class EActiveRecordRelationBehavior extends CActiveRecordBehavior
 
 						// refresh relation data
 						//$this->owner->getRelated($name, true); // will come back with github issue #4
-
-					break;
-					// HAS_MANY: if the relationship between table A and B is one-to-many, then A has many B
-					//           (e.g. User has many Post);
-					// HAS_ONE: this is special case of HAS_MANY where A has at most one B
-					//          (e.g. User has at most one Profile);
-					// need to change the foreign ARs attributes
-					case CActiveRecord::HAS_MANY:
-					case CActiveRecord::HAS_ONE:
-
-						if (!$this->owner->hasRelated($name) || !$this->isRelationSupported($relation))
-							break;
-
-						Yii::trace(
-							'updating '.(($relation[0]==CActiveRecord::HAS_ONE)?'HAS_ONE':'HAS_MANY').
-							' foreign-key field for relation '.get_class($this->owner).'.'.$name,
-							'system.db.ar.CActiveRecord'
-						);
-
-						$newRelatedRecords=$this->owner->getRelated($name, false);
-
-						if ($relation[0]==CActiveRecord::HAS_MANY && !is_array($newRelatedRecords))
-							throw new CDbException('A HAS_MANY relation needs to be an array of records or primary keys!');
-
-						// HAS_ONE is special case of HAS_MANY, so we have array with one or no element
-						if ($relation[0]==CActiveRecord::HAS_ONE) {
-							if ($newRelatedRecords===null)
-								$newRelatedRecords=array();
-							else
-								$newRelatedRecords=array($newRelatedRecords);
-						}
-
-						// get related records as objects and primary keys
-						$newRelatedRecords=$this->primaryKeysToObjects($newRelatedRecords, $relation[1]);
-						$newPKs=$this->objectsToPrimaryKeys($newRelatedRecords);
-
-						// update all not anymore related records
-						$criteria=new ECompositeDbCriteria();
-						$criteria->addNotInCondition(CActiveRecord::model($relation[1])->tableSchema->primaryKey, $newPKs);
-						// @todo add support for composite primary keys
-						$criteria->addColumnCondition(array($relation[2]=>$this->owner->getPrimaryKey()));
-						if (CActiveRecord::model($relation[1])->tableSchema->getColumn($relation[2])->allowNull) {
-							CActiveRecord::model($relation[1])->updateAll(array($relation[2]=>null), $criteria);
-						} else {
-							CActiveRecord::model($relation[1])->deleteAll($criteria);
-						}
-
-						/** @var CActiveRecord $record */
-						foreach($newRelatedRecords as $record) {
-							// only save if relation did not exist
-							// @todo add support for composite primary keys
-							if ($record->{$relation[2]}===null || $record->{$relation[2]} !=  $this->owner->getPrimaryKey()) {
-								$record->saveAttributes(array($relation[2] => $this->owner->getPrimaryKey()));
-							}
-						}
 
 					break;
 				}
@@ -271,32 +177,6 @@ class EActiveRecordRelationBehavior extends CActiveRecordBehavior
 			$pks[]=is_object($record) ? $record->getPrimaryKey() : $record;
 		}
 		return $pks;
-	}
-
-	/**
-	 * converts an array of AR objects or primary keys to only AR objects
-	 *
-	 * @throws CDbException
-	 * @param CActiveRecord[] $pks
-	 * @param string $className classname of the ARs to instantiate
-	 * @return array
-	 */
-	protected function primaryKeysToObjects($pks, $className)
-	{
-		// @todo increase performance by running one query with findAllByPk()
-		$records=array();
-		foreach($pks as $pk) {
-			$record=$pk;
-			if (is_object($record) && $record->isNewRecord)
-				throw new CDbException('You can not save a record that has new related records!');
-			if (!is_object($record))
-				$record=CActiveRecord::model($className)->findByPk($pk);
-			if ($record===null)
-				throw new CDbException('Related record with primary key "'.print_r($pk,true).'" does not exist!');
-
-			$records[]=$record;
-		}
-		return $records;
 	}
 
 	/**
